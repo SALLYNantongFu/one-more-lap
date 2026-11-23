@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>One More Lap?</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #15191d; color: #faf5e8; font: 1rem system-ui, sans-serif; }
+    main { max-width: 34rem; margin: auto; padding: 2rem 1rem; }
+    h1 { font-size: clamp(2.5rem, 8vw, 4rem); letter-spacing: -.06em; margin: 0; }
+    p { line-height: 1.5; }
+    .scene { display: block; width: 100%; height: auto; border-radius: 12px; }
+    .road { fill: #30363b; }
+    .sidewalk { fill: #77756c; }
+    .lane-line { stroke: #8f9496; stroke-dasharray: 6 7; opacity: .55; }
+    .alignment-mark[hidden] { display: none; }
+    .alignment-mark { fill: none; stroke: #81d6bd; stroke-dasharray: 3 3; opacity: .65; }
+    #spot { fill: none; stroke: #edcf80; stroke-width: 1.5; }
+    #spot.warning { stroke: #ffab63; animation: flash .6s steps(1) infinite; }
+    @keyframes flash { 50% { opacity: .22; } }
+    @media (prefers-reduced-motion: reduce) { #spot.warning { animation: none; } }
+    .parked-car { color: #929ca5; }
+    .parked-car:nth-child(even) { color: #a99286; }
+    #car { color: #81d6bd; }
+    #message { font-size: 1.2rem; font-weight: 700; margin: .9rem 0; }
+    .speed-label { display: flex; justify-content: space-between; gap: 1rem; }
+    input { width: 100%; margin: .7rem 0 .3rem; accent-color: #81d6bd; }
+    .hint { font-size: .9rem; color: #d3cdc0; margin: 0; }
+    button {
+      color: inherit; background: #30363b; border: 1px solid #787d80;
+      border-radius: 6px; padding: .55rem .9rem; font: inherit; margin-top: 1rem;
+    }
+    :focus-visible { outline: 2px solid #edcf80; outline-offset: 3px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>One More Lap?</h1>
+    <p>Use ← and → to line up with the dashed outline, then ease into the gap.</p>
+    <svg class="scene" viewBox="0 0 288 150" role="img"
+         aria-label="Top-down street with cars along both curbs and one parking gap.">
+      <defs>
+        <g id="car-body">
+          <rect x="-30" y="-11" width="60" height="22" rx="7"
+                fill="currentColor" stroke="#182524" stroke-width="1.5"/>
+          <path d="M-19 -7h7l3 14h-10z M9 -7h9v14H9z" fill="#294246"/>
+          <path d="M24 -7h3m-3 14h3" stroke="#faf5e8" stroke-width="2" stroke-linecap="round"/>
+          <path d="M-27 -6h2m-2 12h2" stroke="#923c36" stroke-width="2" stroke-linecap="round"/>
+        </g>
+      </defs>
+      <rect class="road" width="288" height="150"/>
+      <path class="sidewalk" d="M0 0h288v14H0z M0 142h288v8H0z"/>
+      <path class="lane-line" d="M0 56h288"/>
+      <rect id="spot" x="106" y="105" width="98" height="30" rx="2"/>
+      <rect id="alignment-mark" class="alignment-mark" x="209" y="64" width="62" height="26" rx="7"/>
+      <g aria-hidden="true">
+        <use class="parked-car" href="#car-body" transform="translate(43 30) rotate(180)"/>
+        <use class="parked-car" href="#car-body" transform="translate(141 30) rotate(180)"/>
+        <use class="parked-car" href="#car-body" transform="translate(244 30) rotate(180)"/>
+        <use class="parked-car" href="#car-body" transform="translate(73 120)"/>
+        <use class="parked-car" href="#car-body" transform="translate(237 120)"/>
+      </g>
+      <use id="car" href="#car-body" transform="translate(224 77)"/>
+    </svg>
+    <p id="message" role="status">Move right</p>
+    <label class="speed-label" for="speed">
+      <span>Reverse speed</span>
+      <span id="speed-value" aria-hidden="true">0.00</span>
+    </label>
+    <input id="speed" type="range" min="0" max="0.70" step="0.01" value="0" aria-describedby="speed-hint">
+    <p class="hint" id="speed-hint">Safe range: 0.01–0.30. Zero stops the car. Use ↑ and ↓ to adjust the focused slider.</p>
+    <button id="reset" type="button">Try again</button>
+  </main>
+  <script>
+    const car = document.querySelector("#car");
+    const alignmentMark = document.querySelector("#alignment-mark");
+    const spot = document.querySelector("#spot");
+    const speedSlider = document.querySelector("#speed");
+    const speedValue = document.querySelector("#speed-value");
+    const message = document.querySelector("#message");
+    const reset = document.querySelector("#reset");
+
+    const startingX = 224;
+    const alignedX = 240;
+    const startY = 77;
+    const parkedX = 145;
+    const parkedY = 120;
+    const alignmentTolerance = 2;
+    const maxSafeSpeed = 0.30;
+    const steeringSpeed = 18;
+
+    let carX = startingX;
+    let reverseSpeed = 0;
+    let reverseProgress = 0;
+    let previousTime;
+    const arrows = new Set();
+
+    function updateReverseSpeed() {
+      reverseSpeed = speedSlider.valueAsNumber;
+      speedValue.textContent = reverseSpeed.toFixed(2);
+    }
+    speedSlider.addEventListener("input", updateReverseSpeed);
+
+    window.addEventListener("keydown", (event) => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        if (!event.repeat) arrows.add(event.key);
+      }
+    });
+    window.addEventListener("keyup", (event) => arrows.delete(event.key));
+    window.addEventListener("blur", () => arrows.clear());
+
+    function renderCar() {
+      const t = reverseProgress;
+      const distance = carX - parkedX;
+      const curbOffset = parkedY - startY;
+
+      // The car backs left while easing toward the curb, then straightens.
+      const x = carX - distance * t;
+      const y = startY + curbOffset * t * t * (3 - 2 * t);
+      // Point the nose opposite the direction of reverse travel.
+      const angle = -Math.atan2(curbOffset * 6 * t * (1 - t), distance) * 180 / Math.PI;
+      car.setAttribute("transform", `translate(${x} ${y}) rotate(${angle})`);
+    }
+
+    function update(deltaTime) {
+      let status;
+      let tooFast = false;
+
+      if (reverseProgress === 0) {
+        const direction = Number(arrows.has("ArrowRight")) - Number(arrows.has("ArrowLeft"));
+        carX = Math.max(218, Math.min(255, carX + direction * steeringSpeed * deltaTime));
+      }
+
+      const offset = carX - alignedX;
+      if (reverseProgress >= 1) {
+        status = "Parked";
+      } else if (offset < -alignmentTolerance) {
+        status = "Move right";
+      } else if (offset > alignmentTolerance) {
+        status = "Move left";
+      } else if (reverseSpeed === 0) {
+        status = reverseProgress > 0 ? "Paused" : "Ready to reverse";
+      } else if (reverseSpeed > maxSafeSpeed) {
+        status = "Slow down";
+        tooFast = true;
+      } else {
+        reverseProgress = Math.min(1, reverseProgress + reverseSpeed * deltaTime);
+        status = reverseProgress === 1 ? "Parked" : "Backing in";
+      }
+
+      renderCar();
+      alignmentMark.toggleAttribute("hidden", reverseProgress > 0);
+      spot.classList.toggle("warning", tooFast);
+      if (message.textContent !== status) message.textContent = status;
+    }
+
+    reset.addEventListener("click", () => {
+      carX = startingX;
+      reverseProgress = 0;
+      speedSlider.value = "0";
+      updateReverseSpeed();
+      arrows.clear();
+      update(0);
+    });
+
+    function frame(now) {
+      const deltaTime = previousTime === undefined ? 0 : Math.min((now - previousTime) / 1000, 0.05);
+      previousTime = now;
+      update(deltaTime);
+      requestAnimationFrame(frame);
+    }
+
+    updateReverseSpeed();
+    update(0);
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
